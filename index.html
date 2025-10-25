@@ -14,10 +14,19 @@
             'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh4Z3lvc2FvZnZ4d29uZ2FsdndyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjEzMzA4NjYsImV4cCI6MjA3NjkwNjg2Nn0.O20SfjvTGV2O7X2cKt6jhRXe06BbqTLb8I_j7bv0Obo'
         );
 
+        const VERSION = 'v2.0';
+        const CHANGELOG = [
+            { version: 'v2.0', changes: ['Reply to messages', 'Online user count', 'Message timestamps', 'Version banner'] },
+            { version: 'v1.0', changes: ['Initial release', 'Basic chat functionality', 'Notifications'] }
+        ];
+
         let username = '';
         let joined = false;
         let notificationsEnabled = false;
         let lastMessageCount = 0;
+        let replyingTo = null;
+        let onlineUsers = 0;
+        let showChangelog = false;
 
         async function requestNotificationPermission() {
             if ('Notification' in window && Notification.permission === 'default') {
@@ -34,18 +43,93 @@
             }
         }
 
+        function formatTime(timestamp) {
+            const date = new Date(timestamp);
+            return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+        }
+
+        async function updateOnlineCount() {
+            try {
+                await supabase.from('online_users').upsert([
+                    { username: username, last_seen: new Date().toISOString() }
+                ], { onConflict: 'username' });
+
+                const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+                const { data } = await supabase
+                    .from('online_users')
+                    .select('username')
+                    .gte('last_seen', fiveMinutesAgo);
+
+                onlineUsers = data ? data.length : 0;
+            } catch (e) {
+                console.log('Online count feature needs online_users table');
+            }
+        }
+
+        function renderChangelog() {
+            if (!showChangelog) return '';
+            
+            return `
+                <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;" id="changelogModal">
+                    <div style="background: white; margin: 50px auto; padding: 20px; max-width: 500px; border: 2px solid black;">
+                        <h2>Changelog</h2>
+                        ${CHANGELOG.map(log => `
+                            <div style="margin-bottom: 15px;">
+                                <strong>${log.version}</strong>
+                                <ul>
+                                    ${log.changes.map(change => `<li>${change}</li>`).join('')}
+                                </ul>
+                            </div>
+                        `).join('')}
+                        <button id="closeChangelog" style="padding: 5px 15px;">Close</button>
+                    </div>
+                </div>
+            `;
+        }
+
         function render() {
             const appDiv = document.getElementById('app');
             
             if (!joined) {
                 appDiv.innerHTML = `
                     <div style="padding: 20px; font-family: Arial;">
+                        <div style="background: black; color: white; padding: 10px; margin: -20px -20px 20px -20px; text-align: center;">
+                            <strong>Global Chatroom ${VERSION}</strong>
+                            <button id="showChangelogBtn" style="margin-left: 10px; padding: 3px 8px; font-size: 12px;">What's New</button>
+                        </div>
                         <h1>Global Chatroom</h1>
                         <p>Enter your username to join</p>
                         <input type="text" id="usernameInput" placeholder="Username" style="padding: 5px; margin-right: 10px;">
                         <button id="joinBtn" style="padding: 5px 15px;">Join</button>
                     </div>
+                    ${renderChangelog()}
                 `;
+                
+                const showBtn = document.getElementById('showChangelogBtn');
+                if (showBtn) {
+                    showBtn.onclick = () => {
+                        showChangelog = true;
+                        render();
+                    };
+                }
+
+                const closeBtn = document.getElementById('closeChangelog');
+                if (closeBtn) {
+                    closeBtn.onclick = () => {
+                        showChangelog = false;
+                        render();
+                    };
+                }
+
+                const modal = document.getElementById('changelogModal');
+                if (modal) {
+                    modal.onclick = (e) => {
+                        if (e.target === modal) {
+                            showChangelog = false;
+                            render();
+                        }
+                    };
+                }
                 
                 document.getElementById('joinBtn').onclick = async () => {
                     const input = document.getElementById('usernameInput');
@@ -55,7 +139,9 @@
                         await requestNotificationPermission();
                         render();
                         loadMessages();
+                        updateOnlineCount();
                         setInterval(loadMessages, 2000);
+                        setInterval(updateOnlineCount, 30000);
                     }
                 };
                 
@@ -65,6 +151,11 @@
             } else {
                 appDiv.innerHTML = `
                     <div style="padding: 20px; font-family: Arial;">
+                        <div style="background: black; color: white; padding: 10px; margin: -20px -20px 20px -20px; text-align: center;">
+                            <strong>Global Chatroom ${VERSION}</strong>
+                            <button id="showChangelogBtn" style="margin-left: 10px; padding: 3px 8px; font-size: 12px;">What's New</button>
+                            <span style="margin-left: 20px;">👥 ${onlineUsers} online</span>
+                        </div>
                         <h1>Global Chatroom</h1>
                         <p>Logged in as: ${username}</p>
                         <div style="margin-bottom: 10px;">
@@ -73,11 +164,52 @@
                                 Enable Notifications
                             </label>
                         </div>
+                        ${replyingTo ? `
+                            <div style="background: lightgray; padding: 5px; margin-bottom: 10px;">
+                                Replying to <strong>${replyingTo.username}</strong>: ${replyingTo.text}
+                                <button id="cancelReply" style="margin-left: 10px; padding: 2px 8px;">Cancel</button>
+                            </div>
+                        ` : ''}
                         <div id="messages" style="border: 1px solid black; height: 400px; overflow-y: scroll; padding: 10px; margin-bottom: 10px;"></div>
                         <input type="text" id="messageInput" placeholder="Type message..." style="padding: 5px; width: 300px; margin-right: 10px;">
                         <button id="sendBtn" style="padding: 5px 15px;">Send</button>
                     </div>
+                    ${renderChangelog()}
                 `;
+
+                const showBtn = document.getElementById('showChangelogBtn');
+                if (showBtn) {
+                    showBtn.onclick = () => {
+                        showChangelog = true;
+                        render();
+                    };
+                }
+
+                const closeBtn = document.getElementById('closeChangelog');
+                if (closeBtn) {
+                    closeBtn.onclick = () => {
+                        showChangelog = false;
+                        render();
+                    };
+                }
+
+                const modal = document.getElementById('changelogModal');
+                if (modal) {
+                    modal.onclick = (e) => {
+                        if (e.target === modal) {
+                            showChangelog = false;
+                            render();
+                        }
+                    };
+                }
+
+                const cancelBtn = document.getElementById('cancelReply');
+                if (cancelBtn) {
+                    cancelBtn.onclick = () => {
+                        replyingTo = null;
+                        render();
+                    };
+                }
                 
                 document.getElementById('notifToggle').onchange = async (e) => {
                     notificationsEnabled = e.target.checked;
@@ -114,10 +246,31 @@
                     lastMessageCount = data.length;
                     
                     messagesDiv.innerHTML = '';
-                    data.forEach(msg => {
+                    data.forEach((msg, index) => {
                         const msgDiv = document.createElement('div');
-                        msgDiv.style.marginBottom = '8px';
-                        msgDiv.innerHTML = `<strong>${msg.username}:</strong> ${msg.text}`;
+                        msgDiv.style.marginBottom = '10px';
+                        msgDiv.style.padding = '5px';
+                        msgDiv.style.cursor = 'pointer';
+                        msgDiv.style.borderLeft = msg.reply_to ? '3px solid gray' : 'none';
+                        msgDiv.style.paddingLeft = msg.reply_to ? '10px' : '5px';
+                        
+                        let html = '';
+                        if (msg.reply_to) {
+                            try {
+                                const replyData = JSON.parse(msg.reply_to);
+                                html += `<div style="font-size: 12px; color: gray; margin-bottom: 3px;">↩ Replying to ${replyData.username}</div>`;
+                            } catch (e) {}
+                        }
+                        
+                        html += `<strong>${msg.username}</strong> <span style="font-size: 11px; color: gray;">${formatTime(msg.created_at)}</span><br>${msg.text}`;
+                        msgDiv.innerHTML = html;
+                        
+                        msgDiv.onclick = () => {
+                            replyingTo = { username: msg.username, text: msg.text, id: msg.id };
+                            render();
+                            document.getElementById('messageInput').focus();
+                        };
+                        
                         messagesDiv.appendChild(msgDiv);
                     });
                     
@@ -131,12 +284,22 @@
         async function sendMessage() {
             const input = document.getElementById('messageInput');
             if (input.value.trim()) {
-                await supabase
-                    .from('messages')
-                    .insert([
-                        { username: username, text: input.value.trim() }
-                    ]);
+                const messageData = {
+                    username: username,
+                    text: input.value.trim()
+                };
+                
+                if (replyingTo) {
+                    messageData.reply_to = JSON.stringify({
+                        username: replyingTo.username,
+                        text: replyingTo.text
+                    });
+                }
+                
+                await supabase.from('messages').insert([messageData]);
                 input.value = '';
+                replyingTo = null;
+                render();
             }
         }
 
