@@ -9,7 +9,6 @@
     <script type="module">
         import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
-        // Replace with your Supabase credentials
         const supabase = createClient(
             'https://hxgyosaofvxwongalvwr.supabase.co',
             'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh4Z3lvc2FvZnZ4d29uZ2FsdndyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjEzMzA4NjYsImV4cCI6MjA3NjkwNjg2Nn0.O20SfjvTGV2O7X2cKt6jhRXe06BbqTLb8I_j7bv0Obo'
@@ -17,6 +16,23 @@
 
         let username = '';
         let joined = false;
+        let notificationsEnabled = false;
+        let lastMessageCount = 0;
+
+        async function requestNotificationPermission() {
+            if ('Notification' in window && Notification.permission === 'default') {
+                await Notification.requestPermission();
+            }
+        }
+
+        function showNotification(user, text) {
+            if (notificationsEnabled && Notification.permission === 'granted' && document.hidden) {
+                new Notification(`${user} says:`, {
+                    body: text,
+                    icon: 'https://cdn-icons-png.flaticon.com/512/134/134914.png'
+                });
+            }
+        }
 
         function render() {
             const appDiv = document.getElementById('app');
@@ -31,11 +47,12 @@
                     </div>
                 `;
                 
-                document.getElementById('joinBtn').onclick = () => {
+                document.getElementById('joinBtn').onclick = async () => {
                     const input = document.getElementById('usernameInput');
                     if (input.value.trim()) {
                         username = input.value.trim();
                         joined = true;
+                        await requestNotificationPermission();
                         render();
                         loadMessages();
                         setInterval(loadMessages, 2000);
@@ -50,11 +67,24 @@
                     <div style="padding: 20px; font-family: Arial;">
                         <h1>Global Chatroom</h1>
                         <p>Logged in as: ${username}</p>
+                        <div style="margin-bottom: 10px;">
+                            <label>
+                                <input type="checkbox" id="notifToggle" ${notificationsEnabled ? 'checked' : ''}>
+                                Enable Notifications
+                            </label>
+                        </div>
                         <div id="messages" style="border: 1px solid black; height: 400px; overflow-y: scroll; padding: 10px; margin-bottom: 10px;"></div>
                         <input type="text" id="messageInput" placeholder="Type message..." style="padding: 5px; width: 300px; margin-right: 10px;">
                         <button id="sendBtn" style="padding: 5px 15px;">Send</button>
                     </div>
                 `;
+                
+                document.getElementById('notifToggle').onchange = async (e) => {
+                    notificationsEnabled = e.target.checked;
+                    if (notificationsEnabled && Notification.permission === 'default') {
+                        await requestNotificationPermission();
+                    }
+                };
                 
                 document.getElementById('sendBtn').onclick = sendMessage;
                 document.getElementById('messageInput').onkeypress = (e) => {
@@ -72,18 +102,31 @@
 
             if (data) {
                 const messagesDiv = document.getElementById('messages');
-                messagesDiv.innerHTML = '';
-                data.forEach(msg => {
-                    const msgDiv = document.createElement('div');
-                    msgDiv.style.marginBottom = '8px';
-                    msgDiv.innerHTML = `<strong>${msg.username}:</strong> ${msg.text}`;
-                    messagesDiv.appendChild(msgDiv);
-                });
-                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                if (messagesDiv) {
+                    const wasAtBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop === messagesDiv.clientHeight;
+                    
+                    if (data.length > lastMessageCount && lastMessageCount > 0) {
+                        const newMessage = data[data.length - 1];
+                        if (newMessage.username !== username) {
+                            showNotification(newMessage.username, newMessage.text);
+                        }
+                    }
+                    lastMessageCount = data.length;
+                    
+                    messagesDiv.innerHTML = '';
+                    data.forEach(msg => {
+                        const msgDiv = document.createElement('div');
+                        msgDiv.style.marginBottom = '8px';
+                        msgDiv.innerHTML = `<strong>${msg.username}:</strong> ${msg.text}`;
+                        messagesDiv.appendChild(msgDiv);
+                    });
+                    
+                    if (wasAtBottom || lastMessageCount === data.length) {
+                        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                    }
+                }
             }
         }
-
-
 
         async function sendMessage() {
             const input = document.getElementById('messageInput');
