@@ -14,8 +14,9 @@
             'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh4Z3lvc2FvZnZ4d29uZ2FsdndyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjEzMzA4NjYsImV4cCI6MjA3NjkwNjg2Nn0.O20SfjvTGV2O7X2cKt6jhRXe06BbqTLb8I_j7bv0Obo'
         );
 
-        const VERSION = 'v3.0';
+        const VERSION = 'v3.1';
         const CHANGELOG = [
+            { version: 'v3.1', changes: ['Voice messages', 'Hold to record audio'] },
             { version: 'v3.0', changes: ['Image uploads', 'GIF picker', 'Media support'] },
             { version: 'v2.0', changes: ['Reply to messages', 'Online user count', 'Message timestamps', 'Version banner'] },
             { version: 'v1.0', changes: ['Initial release', 'Basic chat functionality', 'Notifications'] }
@@ -38,6 +39,9 @@
         let onlineUsers = 0;
         let showChangelog = false;
         let showMediaPicker = false;
+        let isRecording = false;
+        let mediaRecorder = null;
+        let audioChunks = [];
 
         async function requestNotificationPermission() {
             if ('Notification' in window && Notification.permission === 'default') {
@@ -214,8 +218,10 @@
                         <div style="display: flex; gap: 5px;">
                             <button id="mediaPlusBtn" style="padding: 5px 15px; font-size: 18px;">+</button>
                             <input type="text" id="messageInput" placeholder="Type message..." style="padding: 5px; flex: 1;">
+                            <button id="voiceBtn" style="padding: 5px 15px; font-size: 18px; background: ${isRecording ? 'red' : 'white'};">🎤</button>
                             <button id="sendBtn" style="padding: 5px 15px;">Send</button>
                         </div>
+                        ${isRecording ? '<div style="margin-top: 5px; color: red;">Recording... Hold button to continue</div>' : ''}
                     </div>
                     ${renderChangelog()}
                     ${renderMediaPicker()}
@@ -292,6 +298,21 @@
                         sendGif(gif.dataset.gif);
                     };
                 });
+
+                const voiceBtn = document.getElementById('voiceBtn');
+                if (voiceBtn) {
+                    voiceBtn.onmousedown = startRecording;
+                    voiceBtn.onmouseup = stopRecording;
+                    voiceBtn.onmouseleave = stopRecording;
+                    voiceBtn.ontouchstart = (e) => {
+                        e.preventDefault();
+                        startRecording();
+                    };
+                    voiceBtn.ontouchend = (e) => {
+                        e.preventDefault();
+                        stopRecording();
+                    };
+                }
                 
                 document.getElementById('notifToggle').onchange = async (e) => {
                     notificationsEnabled = e.target.checked;
@@ -345,6 +366,77 @@
         async function sendGif(gifUrl) {
             await sendImage(gifUrl);
             showMediaPicker = false;
+            render();
+        }
+
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = (event) => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    await uploadVoiceMessage(audioBlob);
+                    stream.getTracks().forEach(track => track.stop());
+                };
+
+                mediaRecorder.start();
+                isRecording = true;
+                render();
+            } catch (error) {
+                alert('Error accessing microphone: ' + error.message);
+            }
+        }
+
+        async function stopRecording() {
+            if (mediaRecorder && isRecording) {
+                mediaRecorder.stop();
+                isRecording = false;
+                render();
+            }
+        }
+
+        async function uploadVoiceMessage(audioBlob) {
+            const fileName = `${Date.now()}_voice.webm`;
+            
+            try {
+                const { data, error } = await supabase.storage
+                    .from('voice-messages')
+                    .upload(fileName, audioBlob);
+
+                if (error) throw error;
+
+                const { data: publicURL } = supabase.storage
+                    .from('voice-messages')
+                    .getPublicUrl(fileName);
+
+                await sendVoice(publicURL.publicUrl);
+            } catch (error) {
+                alert('Error uploading voice message: ' + error.message);
+            }
+        }
+
+        async function sendVoice(voiceUrl) {
+            const messageData = {
+                username: username,
+                text: '',
+                voice_url: voiceUrl
+            };
+            
+            if (replyingTo) {
+                messageData.reply_to = JSON.stringify({
+                    username: replyingTo.username,
+                    text: replyingTo.text
+                });
+            }
+            
+            await supabase.from('messages').insert([messageData]);
+            replyingTo = null;
             render();
         }
 
@@ -408,6 +500,10 @@
                         
                         if (msg.image_url) {
                             html += `<img src="${msg.image_url}" style="max-width: 300px; max-height: 300px; margin-top: 5px; border: 1px solid black;">`;
+                        }
+                        
+                        if (msg.voice_url) {
+                            html += `<div style="margin-top: 5px;"><audio controls style="max-width: 300px;"><source src="${msg.voice_url}" type="audio/webm"></audio></div>`;
                         }
                         
                         if (msg.text) {
