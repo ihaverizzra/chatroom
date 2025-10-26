@@ -14,8 +14,9 @@
             'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh4Z3lvc2FvZnZ4d29uZ2FsdndyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjEzMzA4NjYsImV4cCI6MjA3NjkwNjg2Nn0.O20SfjvTGV2O7X2cKt6jhRXe06BbqTLb8I_j7bv0Obo'
         );
 
-        const VERSION = 'v3.1';
+        const VERSION = 'v3.2';
         const CHANGELOG = [
+            { version: 'v3.2', changes: ['Camera capture', 'Take photos directly'] },
             { version: 'v3.1', changes: ['Voice messages', 'Hold to record audio'] },
             { version: 'v3.0', changes: ['Image uploads', 'GIF picker', 'Media support'] },
             { version: 'v2.0', changes: ['Reply to messages', 'Online user count', 'Message timestamps', 'Version banner'] },
@@ -42,6 +43,8 @@
         let isRecording = false;
         let mediaRecorder = null;
         let audioChunks = [];
+        let cameraStream = null;
+        let showCamera = false;
 
         async function requestNotificationPermission() {
             if ('Notification' in window && Notification.permission === 'default') {
@@ -105,10 +108,31 @@
         function renderMediaPicker() {
             if (!showMediaPicker) return '';
             
+            if (showCamera) {
+                return `
+                    <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.9); z-index: 1000;" id="cameraModal">
+                        <div style="background: white; margin: 20px auto; padding: 20px; max-width: 600px; border: 2px solid black; text-align: center;">
+                            <h2>Take a Photo</h2>
+                            <video id="cameraPreview" autoplay style="width: 100%; max-width: 500px; border: 2px solid black;"></video>
+                            <canvas id="photoCanvas" style="display: none;"></canvas>
+                            <div style="margin-top: 10px;">
+                                <button id="captureBtn" style="padding: 10px 20px; font-size: 16px; margin-right: 10px;">📸 Capture</button>
+                                <button id="closeCameraBtn" style="padding: 10px 20px;">Cancel</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            
             return `
                 <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;" id="mediaPickerModal">
                     <div style="background: white; margin: 50px auto; padding: 20px; max-width: 500px; border: 2px solid black; max-height: 500px; overflow-y: auto;">
                         <h2>Choose Media</h2>
+                        
+                        <div style="margin-bottom: 20px;">
+                            <h3>Take Photo</h3>
+                            <button id="openCameraBtn" style="padding: 10px 20px; font-size: 16px;">📷 Open Camera</button>
+                        </div>
                         
                         <div style="margin-bottom: 20px;">
                             <h3>Upload Image</h3>
@@ -292,6 +316,21 @@
                     uploadBtn.onclick = handleImageUpload;
                 }
 
+                const openCameraBtn = document.getElementById('openCameraBtn');
+                if (openCameraBtn) {
+                    openCameraBtn.onclick = openCamera;
+                }
+
+                const captureBtn = document.getElementById('captureBtn');
+                if (captureBtn) {
+                    captureBtn.onclick = capturePhoto;
+                }
+
+                const closeCameraBtn = document.getElementById('closeCameraBtn');
+                if (closeCameraBtn) {
+                    closeCameraBtn.onclick = closeCamera;
+                }
+
                 const gifOptions = document.querySelectorAll('.gif-option');
                 gifOptions.forEach(gif => {
                     gif.onclick = () => {
@@ -367,6 +406,68 @@
             await sendImage(gifUrl);
             showMediaPicker = false;
             render();
+        }
+
+        async function openCamera() {
+            try {
+                cameraStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'user' } 
+                });
+                showCamera = true;
+                render();
+                
+                setTimeout(() => {
+                    const video = document.getElementById('cameraPreview');
+                    if (video) {
+                        video.srcObject = cameraStream;
+                    }
+                }, 100);
+            } catch (error) {
+                alert('Error accessing camera: ' + error.message);
+            }
+        }
+
+        function closeCamera() {
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(track => track.stop());
+                cameraStream = null;
+            }
+            showCamera = false;
+            render();
+        }
+
+        async function capturePhoto() {
+            const video = document.getElementById('cameraPreview');
+            const canvas = document.getElementById('photoCanvas');
+            
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0);
+            
+            canvas.toBlob(async (blob) => {
+                const fileName = `${Date.now()}_photo.jpg`;
+                
+                try {
+                    const { data, error } = await supabase.storage
+                        .from('chat-images')
+                        .upload(fileName, blob);
+
+                    if (error) throw error;
+
+                    const { data: publicURL } = supabase.storage
+                        .from('chat-images')
+                        .getPublicUrl(fileName);
+
+                    await sendImage(publicURL.publicUrl);
+                    closeCamera();
+                    showMediaPicker = false;
+                    render();
+                } catch (error) {
+                    alert('Error uploading photo: ' + error.message);
+                }
+            }, 'image/jpeg');
         }
 
         async function startRecording() {
