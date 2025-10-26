@@ -14,8 +14,9 @@
             'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh4Z3lvc2FvZnZ4d29uZ2FsdndyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjEzMzA4NjYsImV4cCI6MjA3NjkwNjg2Nn0.O20SfjvTGV2O7X2cKt6jhRXe06BbqTLb8I_j7bv0Obo'
         );
 
-        const VERSION = 'v4.0';
+        const VERSION = 'v5.0';
         const CHANGELOG = [
+            { version: 'v5.0', changes: ['DMs and Groups', 'Sidebar navigation', 'Unread notifications', 'Message options menu'] },
             { version: 'v4.0', changes: ['Login/Signup system', 'Guest mode', 'Account protection'] },
             { version: 'v3.2', changes: ['Camera capture', 'Take photos directly'] },
             { version: 'v3.1', changes: ['Voice messages', 'Hold to record audio'] },
@@ -46,7 +47,12 @@
         let audioChunks = [];
         let cameraStream = null;
         let showCamera = false;
-        let authMode = 'login'; // 'login', 'signup', or 'guest'
+        let authMode = 'login';
+        let currentGroupId = null; // null = main chat
+        let groups = [];
+        let hoveredMessageId = null;
+        let showMessageMenu = null;
+        let unreadCounts = {};
 
         async function requestNotificationPermission() {
             if ('Notification' in window && Notification.permission === 'default') {
@@ -87,12 +93,159 @@
             }
         }
 
+        async function loadGroups() {
+            if (isGuest) return;
+            
+            try {
+                const { data } = await supabase
+                    .from('groups')
+                    .select('*')
+                    .contains('members', [username]);
+                
+                if (data) {
+                    groups = data;
+                }
+
+                // Load unread counts
+                const { data: unreadData } = await supabase
+                    .from('unread_messages')
+                    .select('*')
+                    .eq('username', username);
+                
+                if (unreadData) {
+                    unreadCounts = {};
+                    unreadData.forEach(item => {
+                        unreadCounts[item.group_id] = item.count;
+                    });
+                }
+            } catch (e) {
+                console.log('Error loading groups:', e);
+            }
+        }
+
+        async function markAsRead(groupId) {
+            if (!groupId || isGuest) return;
+            
+            try {
+                await supabase
+                    .from('unread_messages')
+                    .delete()
+                    .eq('username', username)
+                    .eq('group_id', groupId);
+                
+                unreadCounts[groupId] = 0;
+            } catch (e) {
+                console.log('Error marking as read:', e);
+            }
+        }
+
+        async function incrementUnread(groupId, excludeUser) {
+            if (!groupId) return;
+            
+            try {
+                const group = groups.find(g => g.id === groupId);
+                if (!group) return;
+                
+                for (const member of group.members) {
+                    if (member !== excludeUser) {
+                        const { data: existing } = await supabase
+                            .from('unread_messages')
+                            .select('*')
+                            .eq('username', member)
+                            .eq('group_id', groupId)
+                            .single();
+                        
+                        if (existing) {
+                            await supabase
+                                .from('unread_messages')
+                                .update({ count: existing.count + 1 })
+                                .eq('username', member)
+                                .eq('group_id', groupId);
+                        } else {
+                            await supabase
+                                .from('unread_messages')
+                                .insert([{ username: member, group_id: groupId, count: 1 }]);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.log('Error incrementing unread:', e);
+            }
+        }
+
+        async function createDM(targetUser) {
+            if (isGuest) return;
+            
+            // Check if DM already exists
+            const existingDM = groups.find(g => 
+                g.is_dm && 
+                g.members.includes(username) && 
+                g.members.includes(targetUser)
+            );
+            
+            if (existingDM) {
+                currentGroupId = existingDM.id;
+                await markAsRead(currentGroupId);
+                render();
+                loadMessages();
+                return;
+            }
+            
+            try {
+                const { data, error } = await supabase
+                    .from('groups')
+                    .insert([{
+                        name: `DM with ${targetUser}`,
+                        members: [username, targetUser],
+                        is_dm: true,
+                        created_by: username
+                    }])
+                    .select()
+                    .single();
+                
+                if (data) {
+                    currentGroupId = data.id;
+                    await loadGroups();
+                    render();
+                    loadMessages();
+                }
+            } catch (e) {
+                alert('Error creating DM: ' + e.message);
+            }
+        }
+
+        async function createGroup(members, name) {
+            if (isGuest) return;
+            
+            try {
+                const { data, error } = await supabase
+                    .from('groups')
+                    .insert([{
+                        name: name,
+                        members: [username, ...members],
+                        is_dm: false,
+                        created_by: username
+                    }])
+                    .select()
+                    .single();
+                
+                if (data) {
+                    currentGroupId = data.id;
+                    await loadGroups();
+                    render();
+                    loadMessages();
+                }
+            } catch (e) {
+                alert('Error creating group: ' + e.message);
+            }
+        }
+
         function renderChangelog() {
             if (!showChangelog) return '';
             
             return `
                 <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;" id="changelogModal">
-                    <div style="background: white; margin: 50px auto; padding: 20px; max-width: 500px; border: 2px solid black;">
+                    <div style="background: white; margin: 50px auto; padding: 20px; max-width: 500px; border: 2px solid black; max-height: 70vh; overflow-y: auto;">
                         <h2>Changelog</h2>
                         ${CHANGELOG.map(log => `
                             <div style="margin-bottom: 15px;">
@@ -158,6 +311,45 @@
             `;
         }
 
+        function renderSidebar() {
+            if (!joined || isGuest) return '';
+            
+            const currentGroup = groups.find(g => g.id === currentGroupId);
+            
+            return `
+                <div style="width: 250px; background: lightgray; padding: 10px; border-right: 2px solid black; height: 100vh; overflow-y: auto; position: fixed; left: 0; top: 0;">
+                    <h3 style="margin-top: 0;">Chats</h3>
+                    
+                    <div style="padding: 10px; background: ${!currentGroupId ? 'white' : 'transparent'}; border: 1px solid black; margin-bottom: 5px; cursor: pointer;" id="mainChatBtn">
+                        <strong>🌍 Everyone</strong>
+                    </div>
+                    
+                    <h4>DMs</h4>
+                    ${groups.filter(g => g.is_dm).map(g => {
+                        const otherUser = g.members.find(m => m !== username);
+                        const unread = unreadCounts[g.id] || 0;
+                        return `
+                            <div style="padding: 8px; background: ${currentGroupId === g.id ? 'white' : 'transparent'}; border: 1px solid black; margin-bottom: 3px; cursor: pointer; position: relative;" class="group-btn" data-group-id="${g.id}">
+                                💬 ${otherUser}
+                                ${unread > 0 ? `<span style="position: absolute; right: 8px; top: 8px; background: red; color: white; border-radius: 50%; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px;">${unread}</span>` : ''}
+                            </div>
+                        `;
+                    }).join('') || '<p style="font-size: 12px; color: gray;">No DMs yet</p>'}
+                    
+                    <h4>Groups</h4>
+                    ${groups.filter(g => !g.is_dm).map(g => {
+                        const unread = unreadCounts[g.id] || 0;
+                        return `
+                            <div style="padding: 8px; background: ${currentGroupId === g.id ? 'white' : 'transparent'}; border: 1px solid black; margin-bottom: 3px; cursor: pointer; position: relative;" class="group-btn" data-group-id="${g.id}">
+                                👥 ${g.name}
+                                ${unread > 0 ? `<span style="position: absolute; right: 8px; top: 8px; background: red; color: white; border-radius: 50%; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px;">${unread}</span>` : ''}
+                            </div>
+                        `;
+                    }).join('') || '<p style="font-size: 12px; color: gray;">No groups yet</p>'}
+                </div>
+            `;
+        }
+
         function render() {
             const appDiv = document.getElementById('app');
             
@@ -200,6 +392,7 @@
                             <div>
                                 <h2>Join as Guest</h2>
                                 <p>No account needed - your messages will show as "(GUEST)"</p>
+                                <p style="color: red; font-size: 14px;">⚠️ Guests cannot use DMs or Groups</p>
                                 <input type="text" id="guestUsername" placeholder="Guest Username" style="padding: 5px; display: block; width: 200px; margin-bottom: 10px;">
                                 <button id="guestBtn" style="padding: 10px 20px;">Join as Guest</button>
                             </div>
@@ -252,36 +445,49 @@
                 const loginBtn = document.getElementById('loginBtn');
                 if (loginBtn) {
                     loginBtn.onclick = handleLogin;
-                    document.getElementById('loginPassword').onkeypress = (e) => {
-                        if (e.key === 'Enter') handleLogin();
-                    };
+                    const passInput = document.getElementById('loginPassword');
+                    if (passInput) {
+                        passInput.onkeypress = (e) => {
+                            if (e.key === 'Enter') handleLogin();
+                        };
+                    }
                 }
                 
                 const signupBtn = document.getElementById('signupBtn');
                 if (signupBtn) {
                     signupBtn.onclick = handleSignup;
-                    document.getElementById('signupPassword').onkeypress = (e) => {
-                        if (e.key === 'Enter') handleSignup();
-                    };
+                    const passInput = document.getElementById('signupPassword');
+                    if (passInput) {
+                        passInput.onkeypress = (e) => {
+                            if (e.key === 'Enter') handleSignup();
+                        };
+                    }
                 }
                 
                 const guestBtn = document.getElementById('guestBtn');
                 if (guestBtn) {
                     guestBtn.onclick = handleGuest;
-                    document.getElementById('guestUsername').onkeypress = (e) => {
-                        if (e.key === 'Enter') handleGuest();
-                    };
+                    const userInput = document.getElementById('guestUsername');
+                    if (userInput) {
+                        userInput.onkeypress = (e) => {
+                            if (e.key === 'Enter') handleGuest();
+                        };
+                    }
                 }
             } else {
                 const displayName = isGuest ? `${username} (GUEST)` : username;
+                const currentGroup = groups.find(g => g.id === currentGroupId);
+                const chatTitle = currentGroupId ? (currentGroup ? currentGroup.name : 'Loading...') : 'Everyone';
+                
                 appDiv.innerHTML = `
-                    <div style="padding: 20px; font-family: Arial;">
+                    ${renderSidebar()}
+                    <div style="margin-left: ${isGuest ? '0' : '250px'}; padding: 20px; font-family: Arial;">
                         <div style="background: black; color: white; padding: 10px; margin: -20px -20px 20px -20px; text-align: center;">
                             <strong>Global Chatroom ${VERSION}</strong>
                             <button id="showChangelogBtn" style="margin-left: 10px; padding: 3px 8px; font-size: 12px;">What's New</button>
-                            <span style="margin-left: 20px;">👥 ${onlineUsers} online</span>
+                            ${!currentGroupId ? `<span style="margin-left: 20px;">👥 ${onlineUsers} online</span>` : ''}
                         </div>
-                        <h1>Global Chatroom</h1>
+                        <h1>${chatTitle}</h1>
                         <p>Logged in as: <strong>${displayName}</strong></p>
                         <div style="margin-bottom: 10px;">
                             <label>
@@ -295,7 +501,7 @@
                                 <button id="cancelReply" style="margin-left: 10px; padding: 2px 8px;">Cancel</button>
                             </div>
                         ` : ''}
-                        <div id="messages" style="border: 1px solid black; height: 400px; overflow-y: scroll; padding: 10px; margin-bottom: 10px;"></div>
+                        <div id="messages" style="border: 1px solid black; height: 400px; overflow-y: scroll; padding: 10px; margin-bottom: 10px; position: relative;"></div>
                         <div style="display: flex; gap: 5px;">
                             <button id="mediaPlusBtn" style="padding: 5px 15px; font-size: 18px;">+</button>
                             <input type="text" id="messageInput" placeholder="Type message..." style="padding: 5px; flex: 1;">
@@ -307,6 +513,26 @@
                     ${renderChangelog()}
                     ${renderMediaPicker()}
                 `;
+
+                const mainChatBtn = document.getElementById('mainChatBtn');
+                if (mainChatBtn) {
+                    mainChatBtn.onclick = async () => {
+                        currentGroupId = null;
+                        await markAsRead(null);
+                        render();
+                        loadMessages();
+                    };
+                }
+
+                const groupBtns = document.querySelectorAll('.group-btn');
+                groupBtns.forEach(btn => {
+                    btn.onclick = async () => {
+                        currentGroupId = btn.dataset.groupId;
+                        await markAsRead(currentGroupId);
+                        render();
+                        loadMessages();
+                    };
+                });
 
                 const showBtn = document.getElementById('showChangelogBtn');
                 if (showBtn) {
@@ -458,11 +684,13 @@
                 isGuest = false;
                 joined = true;
                 await requestNotificationPermission();
+                await loadGroups();
                 render();
                 loadMessages();
                 updateOnlineCount();
                 setInterval(loadMessages, 2000);
                 setInterval(updateOnlineCount, 30000);
+                setInterval(loadGroups, 5000);
             } catch (e) {
                 errorDiv.textContent = 'Error logging in: ' + e.message;
             }
@@ -513,11 +741,13 @@
                 isGuest = false;
                 joined = true;
                 await requestNotificationPermission();
+                await loadGroups();
                 render();
                 loadMessages();
                 updateOnlineCount();
                 setInterval(loadMessages, 2000);
                 setInterval(updateOnlineCount, 30000);
+                setInterval(loadGroups, 5000);
             } catch (e) {
                 errorDiv.textContent = 'Error signing up: ' + e.message;
             }
@@ -703,7 +933,8 @@
             const messageData = {
                 username: displayName,
                 text: '',
-                voice_url: voiceUrl
+                voice_url: voiceUrl,
+                group_id: currentGroupId
             };
             
             if (replyingTo) {
@@ -714,6 +945,11 @@
             }
             
             await supabase.from('messages').insert([messageData]);
+            
+            if (currentGroupId) {
+                await incrementUnread(currentGroupId, username);
+            }
+            
             replyingTo = null;
             render();
         }
@@ -723,7 +959,8 @@
             const messageData = {
                 username: displayName,
                 text: '',
-                image_url: imageUrl
+                image_url: imageUrl,
+                group_id: currentGroupId
             };
             
             if (replyingTo) {
@@ -734,21 +971,34 @@
             }
             
             await supabase.from('messages').insert([messageData]);
+            
+            if (currentGroupId) {
+                await incrementUnread(currentGroupId, username);
+            }
+            
             replyingTo = null;
             render();
         }
 
         async function loadMessages() {
-            const { data, error } = await supabase
+            let query = supabase
                 .from('messages')
                 .select('*')
                 .order('created_at', { ascending: true })
                 .limit(50);
+            
+            if (currentGroupId) {
+                query = query.eq('group_id', currentGroupId);
+            } else {
+                query = query.is('group_id', null);
+            }
+            
+            const { data, error } = await query;
 
             if (data) {
                 const messagesDiv = document.getElementById('messages');
                 if (messagesDiv) {
-                    const wasAtBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop === messagesDiv.clientHeight;
+                    const wasAtBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop <= messagesDiv.clientHeight + 50;
                     
                     if (data.length > lastMessageCount && lastMessageCount > 0) {
                         const newMessage = data[data.length - 1];
@@ -764,9 +1014,10 @@
                         const msgDiv = document.createElement('div');
                         msgDiv.style.marginBottom = '10px';
                         msgDiv.style.padding = '5px';
-                        msgDiv.style.cursor = 'pointer';
                         msgDiv.style.borderLeft = msg.reply_to ? '3px solid gray' : 'none';
                         msgDiv.style.paddingLeft = msg.reply_to ? '10px' : '5px';
+                        msgDiv.style.position = 'relative';
+                        msgDiv.dataset.messageId = msg.id;
                         
                         let html = '';
                         if (msg.reply_to) {
@@ -776,7 +1027,14 @@
                             } catch (e) {}
                         }
                         
-                        html += `<strong>${msg.username}</strong> <span style="font-size: 11px; color: gray;">${formatTime(msg.created_at)}</span><br>`;
+                        html += `<strong>${msg.username}</strong> <span style="font-size: 11px; color: gray;">${formatTime(msg.created_at)}</span>`;
+                        
+                        // Add three dots menu for non-guest users in main chat
+                        if (!isGuest && !currentGroupId && !msg.username.includes('(GUEST)')) {
+                            html += `<span class="msg-menu-btn" data-username="${msg.username}" data-message-id="${msg.id}" style="float: right; cursor: pointer; padding: 2px 5px; display: none;">⋮</span>`;
+                        }
+                        
+                        html += '<br>';
                         
                         if (msg.image_url) {
                             html += `<img src="${msg.image_url}" style="max-width: 300px; max-height: 300px; margin-top: 5px; border: 1px solid black;">`;
@@ -792,16 +1050,79 @@
                         
                         msgDiv.innerHTML = html;
                         
-                        msgDiv.onclick = () => {
-                            replyingTo = { username: msg.username, text: msg.text, id: msg.id };
-                            render();
-                            document.getElementById('messageInput').focus();
+                        // Show menu on hover
+                        msgDiv.onmouseenter = () => {
+                            const menuBtn = msgDiv.querySelector('.msg-menu-btn');
+                            if (menuBtn) menuBtn.style.display = 'inline';
+                        };
+                        
+                        msgDiv.onmouseleave = () => {
+                            const menuBtn = msgDiv.querySelector('.msg-menu-btn');
+                            if (menuBtn && showMessageMenu !== msg.id) menuBtn.style.display = 'none';
                         };
                         
                         messagesDiv.appendChild(msgDiv);
                     });
                     
-                    if (wasAtBottom || lastMessageCount === data.length) {
+                    // Add click handlers for menu buttons
+                    const menuBtns = document.querySelectorAll('.msg-menu-btn');
+                    menuBtns.forEach(btn => {
+                        btn.onclick = (e) => {
+                            e.stopPropagation();
+                            const targetUser = btn.dataset.username;
+                            const messageId = btn.dataset.messageId;
+                            showMessageMenu = messageId;
+                            
+                            // Create popup menu
+                            const existingMenu = document.getElementById('message-options-menu');
+                            if (existingMenu) existingMenu.remove();
+                            
+                            const menu = document.createElement('div');
+                            menu.id = 'message-options-menu';
+                            menu.style.position = 'absolute';
+                            menu.style.background = 'white';
+                            menu.style.border = '2px solid black';
+                            menu.style.padding = '10px';
+                            menu.style.zIndex = '999';
+                            menu.style.left = e.pageX + 'px';
+                            menu.style.top = e.pageY + 'px';
+                            
+                            menu.innerHTML = `
+                                <div style="cursor: pointer; padding: 5px; border-bottom: 1px solid gray;" id="dm-option">💬 Send DM</div>
+                                <div style="cursor: pointer; padding: 5px;" id="reply-option">↩ Reply</div>
+                            `;
+                            
+                            document.body.appendChild(menu);
+                            
+                            document.getElementById('dm-option').onclick = () => {
+                                createDM(targetUser);
+                                menu.remove();
+                                showMessageMenu = null;
+                            };
+                            
+                            document.getElementById('reply-option').onclick = () => {
+                                const msg = data.find(m => m.id == messageId);
+                                if (msg) {
+                                    replyingTo = { username: msg.username, text: msg.text, id: msg.id };
+                                    render();
+                                    document.getElementById('messageInput').focus();
+                                }
+                                menu.remove();
+                                showMessageMenu = null;
+                            };
+                            
+                            // Close menu when clicking elsewhere
+                            setTimeout(() => {
+                                document.addEventListener('click', function closeMenu() {
+                                    menu.remove();
+                                    showMessageMenu = null;
+                                    document.removeEventListener('click', closeMenu);
+                                });
+                            }, 100);
+                        };
+                    });
+                    
+                    if (wasAtBottom) {
                         messagesDiv.scrollTop = messagesDiv.scrollHeight;
                     }
                 }
@@ -814,7 +1135,8 @@
                 const displayName = isGuest ? `${username} (GUEST)` : username;
                 const messageData = {
                     username: displayName,
-                    text: input.value.trim()
+                    text: input.value.trim(),
+                    group_id: currentGroupId
                 };
                 
                 if (replyingTo) {
@@ -825,6 +1147,11 @@
                 }
                 
                 await supabase.from('messages').insert([messageData]);
+                
+                if (currentGroupId) {
+                    await incrementUnread(currentGroupId, username);
+                }
+                
                 input.value = '';
                 replyingTo = null;
                 render();
