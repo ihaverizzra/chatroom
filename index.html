@@ -14,8 +14,9 @@
             'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh4Z3lvc2FvZnZ4d29uZ2FsdndyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjEzMzA4NjYsImV4cCI6MjA3NjkwNjg2Nn0.O20SfjvTGV2O7X2cKt6jhRXe06BbqTLb8I_j7bv0Obo'
         );
 
-        const VERSION = 'v3.2';
+        const VERSION = 'v4.0';
         const CHANGELOG = [
+            { version: 'v4.0', changes: ['Login/Signup system', 'Guest mode', 'Account protection'] },
             { version: 'v3.2', changes: ['Camera capture', 'Take photos directly'] },
             { version: 'v3.1', changes: ['Voice messages', 'Hold to record audio'] },
             { version: 'v3.0', changes: ['Image uploads', 'GIF picker', 'Media support'] },
@@ -23,7 +24,6 @@
             { version: 'v1.0', changes: ['Initial release', 'Basic chat functionality', 'Notifications'] }
         ];
 
-        // Add your GIF links here - just edit this list!
         const GIFS = [
             'https://media.giphy.com/media/3oriO0OEd9QIDdllqo/giphy.gif',
             'https://media.giphy.com/media/ujUdrdpX7Ok5W/giphy.gif',
@@ -33,6 +33,7 @@
         ];
 
         let username = '';
+        let isGuest = false;
         let joined = false;
         let notificationsEnabled = false;
         let lastMessageCount = 0;
@@ -45,6 +46,7 @@
         let audioChunks = [];
         let cameraStream = null;
         let showCamera = false;
+        let authMode = 'login'; // 'login', 'signup', or 'guest'
 
         async function requestNotificationPermission() {
             if ('Notification' in window && Notification.permission === 'default') {
@@ -55,7 +57,7 @@
         function showNotification(user, text) {
             if (notificationsEnabled && Notification.permission === 'granted' && document.hidden) {
                 new Notification(`${user} says:`, {
-                    body: text || 'Sent an image',
+                    body: text || 'Sent media',
                     icon: 'https://cdn-icons-png.flaticon.com/512/134/134914.png'
                 });
             }
@@ -68,8 +70,9 @@
 
         async function updateOnlineCount() {
             try {
+                const displayName = isGuest ? `${username} (GUEST)` : username;
                 await supabase.from('online_users').upsert([
-                    { username: username, last_seen: new Date().toISOString() }
+                    { username: displayName, last_seen: new Date().toISOString() }
                 ], { onConflict: 'username' });
 
                 const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
@@ -166,12 +169,59 @@
                             <button id="showChangelogBtn" style="margin-left: 10px; padding: 3px 8px; font-size: 12px;">What's New</button>
                         </div>
                         <h1>Global Chatroom</h1>
-                        <p>Enter your username to join</p>
-                        <input type="text" id="usernameInput" placeholder="Username" style="padding: 5px; margin-right: 10px;">
-                        <button id="joinBtn" style="padding: 5px 15px;">Join</button>
+                        
+                        <div style="margin-bottom: 20px; border-bottom: 2px solid black; padding-bottom: 10px;">
+                            <button id="loginTabBtn" style="padding: 10px 20px; background: ${authMode === 'login' ? 'black' : 'white'}; color: ${authMode === 'login' ? 'white' : 'black'}; border: 1px solid black; margin-right: 5px;">Login</button>
+                            <button id="signupTabBtn" style="padding: 10px 20px; background: ${authMode === 'signup' ? 'black' : 'white'}; color: ${authMode === 'signup' ? 'white' : 'black'}; border: 1px solid black; margin-right: 5px;">Sign Up</button>
+                            <button id="guestTabBtn" style="padding: 10px 20px; background: ${authMode === 'guest' ? 'black' : 'white'}; color: ${authMode === 'guest' ? 'white' : 'black'}; border: 1px solid black;">Guest</button>
+                        </div>
+                        
+                        ${authMode === 'login' ? `
+                            <div>
+                                <h2>Login</h2>
+                                <input type="text" id="loginUsername" placeholder="Username" style="padding: 5px; display: block; width: 200px; margin-bottom: 10px;">
+                                <input type="password" id="loginPassword" placeholder="Password" style="padding: 5px; display: block; width: 200px; margin-bottom: 10px;">
+                                <button id="loginBtn" style="padding: 10px 20px;">Login</button>
+                                <div id="loginError" style="color: red; margin-top: 10px;"></div>
+                            </div>
+                        ` : ''}
+                        
+                        ${authMode === 'signup' ? `
+                            <div>
+                                <h2>Sign Up</h2>
+                                <input type="text" id="signupUsername" placeholder="Choose Username" style="padding: 5px; display: block; width: 200px; margin-bottom: 10px;">
+                                <input type="password" id="signupPassword" placeholder="Choose Password" style="padding: 5px; display: block; width: 200px; margin-bottom: 10px;">
+                                <button id="signupBtn" style="padding: 10px 20px;">Sign Up</button>
+                                <div id="signupError" style="color: red; margin-top: 10px;"></div>
+                            </div>
+                        ` : ''}
+                        
+                        ${authMode === 'guest' ? `
+                            <div>
+                                <h2>Join as Guest</h2>
+                                <p>No account needed - your messages will show as "(GUEST)"</p>
+                                <input type="text" id="guestUsername" placeholder="Guest Username" style="padding: 5px; display: block; width: 200px; margin-bottom: 10px;">
+                                <button id="guestBtn" style="padding: 10px 20px;">Join as Guest</button>
+                            </div>
+                        ` : ''}
                     </div>
                     ${renderChangelog()}
                 `;
+                
+                document.getElementById('loginTabBtn').onclick = () => {
+                    authMode = 'login';
+                    render();
+                };
+                
+                document.getElementById('signupTabBtn').onclick = () => {
+                    authMode = 'signup';
+                    render();
+                };
+                
+                document.getElementById('guestTabBtn').onclick = () => {
+                    authMode = 'guest';
+                    render();
+                };
                 
                 const showBtn = document.getElementById('showChangelogBtn');
                 if (showBtn) {
@@ -199,24 +249,31 @@
                     };
                 }
                 
-                document.getElementById('joinBtn').onclick = async () => {
-                    const input = document.getElementById('usernameInput');
-                    if (input.value.trim()) {
-                        username = input.value.trim();
-                        joined = true;
-                        await requestNotificationPermission();
-                        render();
-                        loadMessages();
-                        updateOnlineCount();
-                        setInterval(loadMessages, 2000);
-                        setInterval(updateOnlineCount, 30000);
-                    }
-                };
+                const loginBtn = document.getElementById('loginBtn');
+                if (loginBtn) {
+                    loginBtn.onclick = handleLogin;
+                    document.getElementById('loginPassword').onkeypress = (e) => {
+                        if (e.key === 'Enter') handleLogin();
+                    };
+                }
                 
-                document.getElementById('usernameInput').onkeypress = (e) => {
-                    if (e.key === 'Enter') document.getElementById('joinBtn').click();
-                };
+                const signupBtn = document.getElementById('signupBtn');
+                if (signupBtn) {
+                    signupBtn.onclick = handleSignup;
+                    document.getElementById('signupPassword').onkeypress = (e) => {
+                        if (e.key === 'Enter') handleSignup();
+                    };
+                }
+                
+                const guestBtn = document.getElementById('guestBtn');
+                if (guestBtn) {
+                    guestBtn.onclick = handleGuest;
+                    document.getElementById('guestUsername').onkeypress = (e) => {
+                        if (e.key === 'Enter') handleGuest();
+                    };
+                }
             } else {
+                const displayName = isGuest ? `${username} (GUEST)` : username;
                 appDiv.innerHTML = `
                     <div style="padding: 20px; font-family: Arial;">
                         <div style="background: black; color: white; padding: 10px; margin: -20px -20px 20px -20px; text-align: center;">
@@ -225,7 +282,7 @@
                             <span style="margin-left: 20px;">👥 ${onlineUsers} online</span>
                         </div>
                         <h1>Global Chatroom</h1>
-                        <p>Logged in as: ${username}</p>
+                        <p>Logged in as: <strong>${displayName}</strong></p>
                         <div style="margin-bottom: 10px;">
                             <label>
                                 <input type="checkbox" id="notifToggle" ${notificationsEnabled ? 'checked' : ''}>
@@ -234,7 +291,7 @@
                         </div>
                         ${replyingTo ? `
                             <div style="background: lightgray; padding: 5px; margin-bottom: 10px;">
-                                Replying to <strong>${replyingTo.username}</strong>: ${replyingTo.text || '[Image]'}
+                                Replying to <strong>${replyingTo.username}</strong>: ${replyingTo.text || '[Media]'}
                                 <button id="cancelReply" style="margin-left: 10px; padding: 2px 8px;">Cancel</button>
                             </div>
                         ` : ''}
@@ -365,6 +422,125 @@
                     if (e.key === 'Enter') sendMessage();
                 };
             }
+        }
+
+        async function handleLogin() {
+            const usernameInput = document.getElementById('loginUsername');
+            const passwordInput = document.getElementById('loginPassword');
+            const errorDiv = document.getElementById('loginError');
+            
+            const user = usernameInput.value.trim();
+            const pass = passwordInput.value.trim();
+            
+            if (!user || !pass) {
+                errorDiv.textContent = 'Please enter username and password';
+                return;
+            }
+            
+            try {
+                const { data, error } = await supabase
+                    .from('users')
+                    .select('*')
+                    .eq('username', user)
+                    .single();
+                
+                if (error || !data) {
+                    errorDiv.textContent = 'Username not found';
+                    return;
+                }
+                
+                if (data.password !== pass) {
+                    errorDiv.textContent = 'Incorrect password';
+                    return;
+                }
+                
+                username = user;
+                isGuest = false;
+                joined = true;
+                await requestNotificationPermission();
+                render();
+                loadMessages();
+                updateOnlineCount();
+                setInterval(loadMessages, 2000);
+                setInterval(updateOnlineCount, 30000);
+            } catch (e) {
+                errorDiv.textContent = 'Error logging in: ' + e.message;
+            }
+        }
+
+        async function handleSignup() {
+            const usernameInput = document.getElementById('signupUsername');
+            const passwordInput = document.getElementById('signupPassword');
+            const errorDiv = document.getElementById('signupError');
+            
+            const user = usernameInput.value.trim();
+            const pass = passwordInput.value.trim();
+            
+            if (!user || !pass) {
+                errorDiv.textContent = 'Please enter username and password';
+                return;
+            }
+            
+            if (user.length < 3) {
+                errorDiv.textContent = 'Username must be at least 3 characters';
+                return;
+            }
+            
+            if (pass.length < 4) {
+                errorDiv.textContent = 'Password must be at least 4 characters';
+                return;
+            }
+            
+            try {
+                const { data: existing } = await supabase
+                    .from('users')
+                    .select('username')
+                    .eq('username', user)
+                    .single();
+                
+                if (existing) {
+                    errorDiv.textContent = 'Username already taken';
+                    return;
+                }
+                
+                const { error } = await supabase
+                    .from('users')
+                    .insert([{ username: user, password: pass }]);
+                
+                if (error) throw error;
+                
+                username = user;
+                isGuest = false;
+                joined = true;
+                await requestNotificationPermission();
+                render();
+                loadMessages();
+                updateOnlineCount();
+                setInterval(loadMessages, 2000);
+                setInterval(updateOnlineCount, 30000);
+            } catch (e) {
+                errorDiv.textContent = 'Error signing up: ' + e.message;
+            }
+        }
+
+        async function handleGuest() {
+            const usernameInput = document.getElementById('guestUsername');
+            const user = usernameInput.value.trim();
+            
+            if (!user) {
+                alert('Please enter a username');
+                return;
+            }
+            
+            username = user;
+            isGuest = true;
+            joined = true;
+            await requestNotificationPermission();
+            render();
+            loadMessages();
+            updateOnlineCount();
+            setInterval(loadMessages, 2000);
+            setInterval(updateOnlineCount, 30000);
         }
 
         async function handleImageUpload() {
@@ -523,8 +699,9 @@
         }
 
         async function sendVoice(voiceUrl) {
+            const displayName = isGuest ? `${username} (GUEST)` : username;
             const messageData = {
-                username: username,
+                username: displayName,
                 text: '',
                 voice_url: voiceUrl
             };
@@ -542,8 +719,9 @@
         }
 
         async function sendImage(imageUrl) {
+            const displayName = isGuest ? `${username} (GUEST)` : username;
             const messageData = {
-                username: username,
+                username: displayName,
                 text: '',
                 image_url: imageUrl
             };
@@ -574,7 +752,8 @@
                     
                     if (data.length > lastMessageCount && lastMessageCount > 0) {
                         const newMessage = data[data.length - 1];
-                        if (newMessage.username !== username) {
+                        const displayName = isGuest ? `${username} (GUEST)` : username;
+                        if (newMessage.username !== displayName) {
                             showNotification(newMessage.username, newMessage.text);
                         }
                     }
@@ -632,8 +811,9 @@
         async function sendMessage() {
             const input = document.getElementById('messageInput');
             if (input.value.trim()) {
+                const displayName = isGuest ? `${username} (GUEST)` : username;
                 const messageData = {
-                    username: username,
+                    username: displayName,
                     text: input.value.trim()
                 };
                 
