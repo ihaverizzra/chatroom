@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Novi Chatroom</title>
+    <title>Global Chatroom</title>
 </head>
 <body>
     <div id="app"></div>
@@ -14,10 +14,20 @@
             'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh4Z3lvc2FvZnZ4d29uZ2FsdndyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjEzMzA4NjYsImV4cCI6MjA3NjkwNjg2Nn0.O20SfjvTGV2O7X2cKt6jhRXe06BbqTLb8I_j7bv0Obo'
         );
 
-        const VERSION = 'v2.0';
+        const VERSION = 'v3.0';
         const CHANGELOG = [
+            { version: 'v3.0', changes: ['Image uploads', 'GIF picker', 'Media support'] },
             { version: 'v2.0', changes: ['Reply to messages', 'Online user count', 'Message timestamps', 'Version banner'] },
             { version: 'v1.0', changes: ['Initial release', 'Basic chat functionality', 'Notifications'] }
+        ];
+
+        // Add your GIF links here - just edit this list!
+        const GIFS = [
+            'https://media.giphy.com/media/3oriO0OEd9QIDdllqo/giphy.gif',
+            'https://media.giphy.com/media/ujUdrdpX7Ok5W/giphy.gif',
+            'https://media.giphy.com/media/ZdUnQS4AXEl1AERdil/giphy.gif',
+            'https://media.giphy.com/media/l3q2K5jinAlChoCLS/giphy.gif',
+            'https://media.giphy.com/media/XreQmk7ETCak0/giphy.gif'
         ];
 
         let username = '';
@@ -27,6 +37,7 @@
         let replyingTo = null;
         let onlineUsers = 0;
         let showChangelog = false;
+        let showMediaPicker = false;
 
         async function requestNotificationPermission() {
             if ('Notification' in window && Notification.permission === 'default') {
@@ -37,7 +48,7 @@
         function showNotification(user, text) {
             if (notificationsEnabled && Notification.permission === 'granted' && document.hidden) {
                 new Notification(`${user} says:`, {
-                    body: text,
+                    body: text || 'Sent an image',
                     icon: 'https://cdn-icons-png.flaticon.com/512/134/134914.png'
                 });
             }
@@ -87,6 +98,35 @@
             `;
         }
 
+        function renderMediaPicker() {
+            if (!showMediaPicker) return '';
+            
+            return `
+                <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000;" id="mediaPickerModal">
+                    <div style="background: white; margin: 50px auto; padding: 20px; max-width: 500px; border: 2px solid black; max-height: 500px; overflow-y: auto;">
+                        <h2>Choose Media</h2>
+                        
+                        <div style="margin-bottom: 20px;">
+                            <h3>Upload Image</h3>
+                            <input type="file" id="imageUpload" accept="image/*" style="padding: 5px;">
+                            <button id="uploadBtn" style="padding: 5px 15px; margin-left: 10px;">Upload</button>
+                        </div>
+                        
+                        <div>
+                            <h3>Choose GIF</h3>
+                            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;">
+                                ${GIFS.map((gif, index) => `
+                                    <img src="${gif}" style="width: 100%; cursor: pointer; border: 2px solid black;" class="gif-option" data-gif="${gif}">
+                                `).join('')}
+                            </div>
+                        </div>
+                        
+                        <button id="closeMediaPicker" style="padding: 5px 15px; margin-top: 20px;">Close</button>
+                    </div>
+                </div>
+            `;
+        }
+
         function render() {
             const appDiv = document.getElementById('app');
             
@@ -94,10 +134,10 @@
                 appDiv.innerHTML = `
                     <div style="padding: 20px; font-family: Arial;">
                         <div style="background: black; color: white; padding: 10px; margin: -20px -20px 20px -20px; text-align: center;">
-                            <strong>Novi Chatroom ${VERSION}</strong>
+                            <strong>Global Chatroom ${VERSION}</strong>
                             <button id="showChangelogBtn" style="margin-left: 10px; padding: 3px 8px; font-size: 12px;">What's New</button>
                         </div>
-                        <h1>Novi Chatroom</h1>
+                        <h1>Global Chatroom</h1>
                         <p>Enter your username to join</p>
                         <input type="text" id="usernameInput" placeholder="Username" style="padding: 5px; margin-right: 10px;">
                         <button id="joinBtn" style="padding: 5px 15px;">Join</button>
@@ -166,15 +206,19 @@
                         </div>
                         ${replyingTo ? `
                             <div style="background: lightgray; padding: 5px; margin-bottom: 10px;">
-                                Replying to <strong>${replyingTo.username}</strong>: ${replyingTo.text}
+                                Replying to <strong>${replyingTo.username}</strong>: ${replyingTo.text || '[Image]'}
                                 <button id="cancelReply" style="margin-left: 10px; padding: 2px 8px;">Cancel</button>
                             </div>
                         ` : ''}
                         <div id="messages" style="border: 1px solid black; height: 400px; overflow-y: scroll; padding: 10px; margin-bottom: 10px;"></div>
-                        <input type="text" id="messageInput" placeholder="Type message..." style="padding: 5px; width: 300px; margin-right: 10px;">
-                        <button id="sendBtn" style="padding: 5px 15px;">Send</button>
+                        <div style="display: flex; gap: 5px;">
+                            <button id="mediaPlusBtn" style="padding: 5px 15px; font-size: 18px;">+</button>
+                            <input type="text" id="messageInput" placeholder="Type message..." style="padding: 5px; flex: 1;">
+                            <button id="sendBtn" style="padding: 5px 15px;">Send</button>
+                        </div>
                     </div>
                     ${renderChangelog()}
+                    ${renderMediaPicker()}
                 `;
 
                 const showBtn = document.getElementById('showChangelogBtn');
@@ -210,6 +254,44 @@
                         render();
                     };
                 }
+
+                const mediaPlusBtn = document.getElementById('mediaPlusBtn');
+                if (mediaPlusBtn) {
+                    mediaPlusBtn.onclick = () => {
+                        showMediaPicker = true;
+                        render();
+                    };
+                }
+
+                const closeMediaBtn = document.getElementById('closeMediaPicker');
+                if (closeMediaBtn) {
+                    closeMediaBtn.onclick = () => {
+                        showMediaPicker = false;
+                        render();
+                    };
+                }
+
+                const mediaModal = document.getElementById('mediaPickerModal');
+                if (mediaModal) {
+                    mediaModal.onclick = (e) => {
+                        if (e.target === mediaModal) {
+                            showMediaPicker = false;
+                            render();
+                        }
+                    };
+                }
+
+                const uploadBtn = document.getElementById('uploadBtn');
+                if (uploadBtn) {
+                    uploadBtn.onclick = handleImageUpload;
+                }
+
+                const gifOptions = document.querySelectorAll('.gif-option');
+                gifOptions.forEach(gif => {
+                    gif.onclick = () => {
+                        sendGif(gif.dataset.gif);
+                    };
+                });
                 
                 document.getElementById('notifToggle').onchange = async (e) => {
                     notificationsEnabled = e.target.checked;
@@ -223,6 +305,66 @@
                     if (e.key === 'Enter') sendMessage();
                 };
             }
+        }
+
+        async function handleImageUpload() {
+            const fileInput = document.getElementById('imageUpload');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                alert('Please select an image first!');
+                return;
+            }
+
+            if (file.size > 5000000) {
+                alert('Image too large! Please choose an image under 5MB.');
+                return;
+            }
+
+            const fileName = `${Date.now()}_${file.name}`;
+            
+            try {
+                const { data, error } = await supabase.storage
+                    .from('chat-images')
+                    .upload(fileName, file);
+
+                if (error) throw error;
+
+                const { data: publicURL } = supabase.storage
+                    .from('chat-images')
+                    .getPublicUrl(fileName);
+
+                await sendImage(publicURL.publicUrl);
+                showMediaPicker = false;
+                render();
+            } catch (error) {
+                alert('Error uploading image: ' + error.message);
+            }
+        }
+
+        async function sendGif(gifUrl) {
+            await sendImage(gifUrl);
+            showMediaPicker = false;
+            render();
+        }
+
+        async function sendImage(imageUrl) {
+            const messageData = {
+                username: username,
+                text: '',
+                image_url: imageUrl
+            };
+            
+            if (replyingTo) {
+                messageData.reply_to = JSON.stringify({
+                    username: replyingTo.username,
+                    text: replyingTo.text
+                });
+            }
+            
+            await supabase.from('messages').insert([messageData]);
+            replyingTo = null;
+            render();
         }
 
         async function loadMessages() {
@@ -262,7 +404,16 @@
                             } catch (e) {}
                         }
                         
-                        html += `<strong>${msg.username}</strong> <span style="font-size: 11px; color: gray;">${formatTime(msg.created_at)}</span><br>${msg.text}`;
+                        html += `<strong>${msg.username}</strong> <span style="font-size: 11px; color: gray;">${formatTime(msg.created_at)}</span><br>`;
+                        
+                        if (msg.image_url) {
+                            html += `<img src="${msg.image_url}" style="max-width: 300px; max-height: 300px; margin-top: 5px; border: 1px solid black;">`;
+                        }
+                        
+                        if (msg.text) {
+                            html += msg.text;
+                        }
+                        
                         msgDiv.innerHTML = html;
                         
                         msgDiv.onclick = () => {
