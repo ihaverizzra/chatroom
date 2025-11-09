@@ -59,7 +59,53 @@
         let showProfileCard = null;
         let userProfile = { profile_picture: null, bio: 'No bio yet' };
         let userProfiles = {};
+        let hasSecretBadge = false;
 
+        async function handleSecretBadge() {
+    if (isGuest) {
+        alert('Guests cannot earn badges! Create an account to get the Secret Finder badge.');
+        return;
+    }
+    
+    if (hasSecretBadge) {
+        alert('You already found the secret!');
+        return;
+    }
+    
+    try {
+        const { data: existingBadge } = await supabase
+            .from('user_badges')
+            .select('*')
+            .eq('username', username)
+            .eq('badge', 'Secret Finder')
+            .single();
+        
+        if (existingBadge) {
+            hasSecretBadge = true;
+            alert('🎉 You already found this secret!');
+            return;
+        }
+        
+        await supabase
+            .from('user_badges')
+            .insert([{
+                username: username,
+                badge: 'Secret Finder',
+                earned_month: new Date().toLocaleString('default', { month: 'long', year: 'numeric' })
+            }]);
+        
+        hasSecretBadge = true;
+    
+        await loadUserProfile();
+        
+        alert('🎉 YOU FOUND THE SECRET! 🎉\n\nYou earned the "Secret Finder" badge!\nCheck your profile to see it!');
+        
+        render();
+    } catch (e) {
+        console.log('Error giving secret badge:', e);
+    }
+}
+        
         async function requestNotificationPermission() {
             if ('Notification' in window && Notification.permission === 'default') {
                 await Notification.requestPermission();
@@ -420,6 +466,11 @@
                         }).join('') || '<p style="font-size: 12px; color: gray;">No DMs yet</p>'}
                         
                         <h4>Groups</h4>
+
+<div style="margin-top: 10px; text-align: center;">
+    <button id="secretBtn" style="padding: 5px 10px; font-size: 10px; background: purple; color: white; border: 1px solid black; cursor: pointer;">click me</button>
+</div>
+                        
                         ${groups.filter(g => !g.is_dm).map(g => {
                             const unread = unreadCounts[g.id] || 0;
                             return `
@@ -498,7 +549,12 @@
                 document.getElementById('loginTabBtn').onclick = () => { authMode = 'login'; render(); };
                 document.getElementById('signupTabBtn').onclick = () => { authMode = 'signup'; render(); };
                 document.getElementById('guestTabBtn').onclick = () => { authMode = 'guest'; render(); };
-                
+
+                const secretBtn = document.getElementById('secretBtn');
+                if (secretBtn) {
+                    secretBtn.onclick = handleSecretBadge;
+                }
+
                 const showBtn = document.getElementById('showChangelogBtn');
                 if (showBtn) {
                     showBtn.onclick = () => { showChangelog = true; render(); };
